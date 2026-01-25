@@ -50,9 +50,10 @@ void SevSegShift::begin(uint8_t displayType, uint8_t numDigits,
     pinMode(_clockPin, OUTPUT);
     pinMode(_latchPin, OUTPUT);
 
-    digitalWrite(_dataPin, LOW);
-    digitalWrite(_clockPin, LOW);
-    digitalWrite(_latchPin, LOW);
+    // Inverted polarity - all signals idle HIGH
+    digitalWrite(_dataPin, HIGH);
+    digitalWrite(_clockPin, HIGH);
+    digitalWrite(_latchPin, HIGH);
 
     blank();
 }
@@ -63,23 +64,35 @@ void SevSegShift::shiftOut16(uint8_t segments, uint8_t digitSelect) {
         segments = ~segments;
     }
 
+    // Ensure clock starts HIGH
+    digitalWrite(_clockPin, HIGH);
+
     // Shift out segment data (goes to second register in chain)
+    // INVERTED polarity: data inverted, clock falling edge
     for (int8_t i = 7; i >= 0; i--) {
-        digitalWrite(_dataPin, (segments >> i) & 0x01);
+        digitalWrite(_dataPin, !((segments >> i) & 0x01));  // Inverted data
+        delayMicroseconds(2);  // Data setup time
+        digitalWrite(_clockPin, LOW);   // Falling edge samples data
+        delayMicroseconds(2);
         digitalWrite(_clockPin, HIGH);
-        digitalWrite(_clockPin, LOW);
+        delayMicroseconds(2);
     }
 
     // Shift out digit select data (goes to first register)
     for (int8_t i = 7; i >= 0; i--) {
-        digitalWrite(_dataPin, (digitSelect >> i) & 0x01);
+        digitalWrite(_dataPin, !((digitSelect >> i) & 0x01));  // Inverted data
+        delayMicroseconds(2);  // Data setup time
+        digitalWrite(_clockPin, LOW);   // Falling edge samples data
+        delayMicroseconds(2);
         digitalWrite(_clockPin, HIGH);
-        digitalWrite(_clockPin, LOW);
+        delayMicroseconds(2);
     }
 
-    // Latch data to outputs
-    digitalWrite(_latchPin, HIGH);
+    // Latch data to outputs - INVERTED (active LOW)
+    delayMicroseconds(2);
     digitalWrite(_latchPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(_latchPin, HIGH);
 }
 
 void SevSegShift::refreshDisplay() {
