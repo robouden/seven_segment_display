@@ -2,9 +2,13 @@
  * SevSegShift - 7-Segment Display Library with Shift Register Support
  *
  * Fork of SevSeg library adapted for daisy-chained shift registers.
+ * Uses optimized assembly routine for shift register timing.
  */
 
 #include "SevSegShift.h"
+
+// External assembly function for fast shift register output
+extern "C" void shiftOut16_asm(uint8_t segments, uint8_t digitSelect);
 
 // Segment patterns (bit order: DP G F E D C B A)
 static const uint8_t SEGMENT_MAP[] = {
@@ -64,39 +68,8 @@ void SevSegShift::shiftOut16(uint8_t segments, uint8_t digitSelect) {
         segments = ~segments;
     }
 
-    // Ensure all lines start at idle HIGH
-    digitalWrite(_clockPin, HIGH);
-    digitalWrite(_dataPin, HIGH);
-
-    // Shift out segment data (goes to second register in chain)
-    // Falling edge clock, data not inverted
-    for (int8_t i = 7; i >= 0; i--) {
-        digitalWrite(_dataPin, (segments >> i) & 0x01);
-        delayMicroseconds(2);  // Data setup time
-        digitalWrite(_clockPin, LOW);   // Falling edge samples data
-        delayMicroseconds(2);
-        digitalWrite(_clockPin, HIGH);  // Return to idle HIGH
-        delayMicroseconds(2);
-    }
-
-    // Shift out digit select data (goes to first register)
-    for (int8_t i = 7; i >= 0; i--) {
-        digitalWrite(_dataPin, (digitSelect >> i) & 0x01);
-        delayMicroseconds(2);  // Data setup time
-        digitalWrite(_clockPin, LOW);   // Falling edge samples data
-        delayMicroseconds(2);
-        digitalWrite(_clockPin, HIGH);  // Return to idle HIGH
-        delayMicroseconds(2);
-    }
-
-    // Latch data to outputs - INVERTED (active LOW)
-    delayMicroseconds(2);
-    digitalWrite(_latchPin, LOW);
-    delayMicroseconds(2);
-    digitalWrite(_latchPin, HIGH);
-
-    // Return data line to idle HIGH state
-    digitalWrite(_dataPin, HIGH);
+    // Use optimized assembly routine for precise timing
+    shiftOut16_asm(segments, digitSelect);
 }
 
 void SevSegShift::refreshDisplay() {
