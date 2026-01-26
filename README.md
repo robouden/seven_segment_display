@@ -53,6 +53,15 @@ All signals use active-LOW logic (idle HIGH):
 - **Clock**: Rising edge (LOW→HIGH) samples data (per HEF4094B datasheet)
 - **Latch**: Active LOW pulse transfers data to outputs
 
+**Pre-sequence** (start of each 16-bit word):
+1. Data LOW (clock still HIGH) - signals start of transmission
+2. Clock LOW (data still LOW) - ready for first bit
+
+**Per-bit timing**:
+1. Set data while clock is LOW
+2. Clock HIGH (rising edge samples data)
+3. Clock LOW (prepare for next bit)
+
 See [lib/readme.txt](lib/readme.txt) for detailed timing specifications.
 
 ## SevSegShift Library
