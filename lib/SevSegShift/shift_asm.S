@@ -76,7 +76,7 @@ shiftOut16_asm:
 
     ; =========================================================================
     ; PRE-SEQUENCE: Data LOW first, then Clock LOW
-    ; This signals the start of a new word transmission
+    ; This signals the start of a new word (data LOW before clock goes LOW)
     ; =========================================================================
 
     ; Ensure we start from idle state (both HIGH)
@@ -94,7 +94,7 @@ preseq_delay1:
     dec r19
     brne preseq_delay1
 
-    ; Step 2: Take Clock LOW (data already LOW)
+    ; Step 2: Take Clock LOW (data still LOW) - ready for first bit
     andi r20, ~CLK_MASK
     out _SFR_IO_ADDR(PORTB), r20
 

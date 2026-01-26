@@ -28,11 +28,12 @@ void shiftOut16_manual(uint8_t segments, uint8_t digitSelect) {
     PORTB |= (1 << DATA_PIN) | (1 << CLOCK_PIN);
 
     // PRE-SEQUENCE: Data LOW first, then Clock LOW
+    // This signals start of word (data LOW before clock goes LOW)
     // Step 1: Data LOW (clock still HIGH)
     PORTB &= ~(1 << DATA_PIN);
     delayMicroseconds(16);
 
-    // Step 2: Clock LOW (data already LOW)
+    // Step 2: Clock LOW (data still LOW) - ready for first bit
     PORTB &= ~(1 << CLOCK_PIN);
     delayMicroseconds(16);
 

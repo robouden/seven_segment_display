@@ -90,8 +90,14 @@ Signal Behavior:
   - Clock: RISING edge (LOW->HIGH) samples data (per HEF4094B datasheet)
   - Latch: active LOW pulse transfers shift register to outputs
 
+Pre-Sequence (start of each word):
+  1. Data LOW (clock still HIGH) - signals start of transmission
+  2. Wait ~16µs
+  3. Clock LOW (data still LOW) - ready for first bit
+  4. Wait ~16µs
+
 Bit Timing (per bit, at 16MHz):
-  1. Clock LOW, set data line (inverted)
+  1. Set data line (inverted) while clock is LOW
   2. Wait ~2µs (data setup time)
   3. Clock HIGH (RISING edge - 4094 samples data here)
   4. Wait ~40µs (clock HIGH hold time)
@@ -100,8 +106,9 @@ Bit Timing (per bit, at 16MHz):
 
 Transmission Sequence:
   1. Ensure Clock and Data are HIGH (idle)
-  2. Shift out 8 bits of segment data (MSB first)
-  3. Shift out 8 bits of digit/LED data (MSB first)
-  4. Return Data line to HIGH
-  5. Latch LOW for ~40µs, then HIGH (transfers data to outputs)
-  6. Wait ~5ms before next digit refresh (~167Hz multiplexing)
+  2. Pre-sequence: Data LOW, wait, Clock LOW, wait
+  3. Shift out 8 bits of segment data (MSB first)
+  4. Shift out 8 bits of digit/LED data (MSB first)
+  5. Return Data and Clock to HIGH (idle)
+  6. Latch LOW for ~40µs, then HIGH (transfers data to outputs)
+  7. Wait ~5ms before next digit refresh (~167Hz multiplexing)
