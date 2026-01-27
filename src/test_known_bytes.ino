@@ -37,13 +37,13 @@ void shiftOut16_manual(uint8_t segments, uint8_t digitSelect) {
     PORTB &= ~(1 << CLOCK_PIN);
     delayMicroseconds(16);
 
-    // Shift out segments (first byte) - MSB first
+    // Shift out first byte - MSB first (NO inversion - values are raw wire values)
     for (int8_t i = 7; i >= 0; i--) {
-        // Clock is LOW - now set data (inverted)
+        // Clock is LOW - set data directly (no inversion)
         if ((segments >> i) & 0x01) {
-            PORTB &= ~(1 << DATA_PIN);  // Bit 1 -> LOW
+            PORTB |= (1 << DATA_PIN);   // Bit 1 -> HIGH
         } else {
-            PORTB |= (1 << DATA_PIN);   // Bit 0 -> HIGH
+            PORTB &= ~(1 << DATA_PIN);  // Bit 0 -> LOW
         }
         delayMicroseconds(2);  // Data setup time
 
@@ -56,13 +56,13 @@ void shiftOut16_manual(uint8_t segments, uint8_t digitSelect) {
         delayMicroseconds(20);
     }
 
-    // Shift out digitSelect (second byte) - MSB first
+    // Shift out second byte - MSB first (NO inversion - values are raw wire values)
     for (int8_t i = 7; i >= 0; i--) {
-        // Clock is LOW - now set data (inverted)
+        // Clock is LOW - set data directly (no inversion)
         if ((digitSelect >> i) & 0x01) {
-            PORTB &= ~(1 << DATA_PIN);  // Bit 1 -> LOW
+            PORTB |= (1 << DATA_PIN);   // Bit 1 -> HIGH
         } else {
-            PORTB |= (1 << DATA_PIN);   // Bit 0 -> HIGH
+            PORTB &= ~(1 << DATA_PIN);  // Bit 0 -> LOW
         }
         delayMicroseconds(2);  // Data setup time
 
@@ -142,7 +142,7 @@ void loop() {
             byte1 = 0x89;
             byte2 = heaterState ? 0xC2 : 0xC0;  // With/without heater
             break;
-        case 1:  // r. on middle digit
+        case 1:  // r on middle digit (no decimal point)
             byte1 = 0x41;
             byte2 = heaterState ? 0x63 : 0x62;  // With/without heater
             break;
