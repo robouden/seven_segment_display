@@ -128,7 +128,88 @@ The main firmware for the Spa Control device is in [src/spa_control.ino](src/spa
 - Error detection and safety shutdown
 - Support for linear (TMP36) and NTC thermistor sensors
 
-Configuration options are in [src/spa_config.h](src/spa_config.h).
+### Configuration
+
+All settings are in [src/spa_config.h](src/spa_config.h):
+
+#### Temperature Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DEFAULT_SETPOINT` | 38.0°C | Target water temperature |
+| `TEMP_HYSTERESIS` | 0.5°C | Heater turns ON below (setpoint - 0.5°C), OFF above (setpoint + 0.5°C) |
+| `MIN_SETPOINT` | 20.0°C | Minimum allowed setpoint |
+| `MAX_SETPOINT` | 42.0°C | Maximum allowed setpoint |
+| `MAX_TEMP_SAFE` | 45.0°C | Safety cutoff - heater shuts off immediately above this |
+
+#### Sensor Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `SENSOR_READ_INTERVAL` | 500ms | How often to read the temperature sensor |
+| `ADC_SAMPLES` | 8 | Number of ADC samples to average (reduces noise) |
+| `SENSOR_ERROR_THRESHOLD` | 3 | Consecutive bad readings before entering error mode |
+| `TEMP_OFFSET` | 0.0 | Calibration offset added to final temperature |
+| `TEMP_SCALE` | 1.0 | Calibration multiplier for temperature |
+| `ADC_VREF_MV` | 5000 | ADC reference voltage in mV (use 3300 for 3.3V systems) |
+
+#### Sensor Type Selection
+
+Uncomment ONE of these in `spa_config.h`:
+
+```c
+// Linear voltage output sensor (TMP36, LM35, etc.)
+#define SENSOR_TYPE_LINEAR
+
+// NTC Thermistor (10K at 25C with 10K pullup)
+// #define SENSOR_TYPE_NTC_10K
+```
+
+**Linear Sensor Parameters** (for TMP36, LM35):
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `LINEAR_OFFSET_MV` | 500 | Voltage at 0°C in millivolts (TMP36=500, LM35=0) |
+| `LINEAR_MV_PER_DEGREE` | 10 | Millivolts per degree Celsius |
+
+**NTC Thermistor Parameters**:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `NTC_RESISTANCE_25C` | 10000 | Thermistor resistance at 25°C (ohms) |
+| `NTC_PULLUP_RESISTANCE` | 10000 | Pullup resistor value (ohms) |
+| `NTC_BETA` | 3950 | Beta coefficient (check thermistor datasheet) |
+
+#### Display Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `NUM_DIGITS` | 3 | Number of display digits |
+| `REFRESH_DELAY_US` | 5000 | Microseconds per digit (lower = brighter, range: 3000-6000) |
+| `TEMP_DECIMAL_PLACES` | 1 | Decimal places shown for temperature |
+
+#### Pin Assignments
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `DATA_PIN` | PB3 | Serial data to shift registers |
+| `CLOCK_PIN` | PB5 | Clock signal to shift registers |
+| `LATCH_PIN` | PD5 | Latch/strobe to shift registers |
+| `TEMP_SENSOR_PIN` | A0 | Temperature sensor ADC input |
+| `PUMP_SWITCH_PIN` | PD2 | Pump button input |
+| `AIR_SWITCH_PIN` | PD3 | Air jets button input |
+| `AUTO_SWITCH_PIN` | PD4 | Auto mode button input |
+| `HEATER_RELAY_PIN` | PD6 | Heater relay output |
+| `PUMP_RELAY_PIN` | PD7 | Pump relay output |
+
+#### Feature Toggles
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ENABLE_AUTO_MODE` | 1 | Enable automatic temperature control |
+| `ENABLE_PUMP_CONTROL` | 1 | Enable pump relay control |
+| `ENABLE_ERROR_DISPLAY` | 1 | Show error codes on display |
+| `DEBUG_SERIAL` | 0 | Enable serial debug output (disable for production)
 
 ## Documentation
 
