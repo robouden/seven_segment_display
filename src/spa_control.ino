@@ -21,38 +21,57 @@
 // ============================================================================
 // TEST MODE - uncomment to use exact bytes from working test_known_bytes.ino
 // ============================================================================
-#define TEST_MODE  // Comment out to use normal display logic
+// #define TEST_MODE  // Comment out to use normal display logic
 
 // ============================================================================
 // SEGMENT PATTERNS
 // ============================================================================
 
 // Segment map (bit order: G C DP D B F E A - specific to this hardware)
+// Segment map (bit order: A E F B D DP C G - specific to this hardware)
 static const uint8_t SEGMENT_MAP[] = {
-    0b01011111, // 0
-    0b01001000, // 1
-    0b10011011, // 2
-    0b11011001, // 3
-    0b11001100, // 4
-    0b11010101, // 5
-    0b11010111, // 6
-    0b01001001, // 7
-    0b11011111, // 8
-    0b11011101, // 9
-    0b11001111, // A
-    0b11010110, // b
-    0b00010111, // C
-    0b11011010, // d
-    0b10010111, // E
-    0b10000111, // F
+    0b11111010, // 0
+    0b00010010, // 1
+    0b11011001, // 2
+    0b10011011, // 3 
+    0b00110011, // 4 
+    0b10101011, // 5
+    0b11101011, // 6 
+    0b10010010, // 7
+    0b11111011, // 8
+    0b10111011, // 9
+    0b11110011, // A
+    0b01101011, // B
+    0b11101000, // C
+    0b01011011, // D
+    0b11101001, // E
+    0b11100001, // F
+
+ //   0b01011111, // 0
+ //   0b01001000, // 1
+ //   0b10011011, // 2
+ //   0b11011001, // 3
+ //   0b11001100, // 4
+ //   0b11010101, // 5
+ //   0b11010111, // 6
+ //   0b01001001, // 7
+ //   0b11011111, // 8
+ //   0b11011101, // 9
+ //   0b11001111, // A
+ //   0b11010110, // b
+ //   0b00010111, // C
+ //   0b11011010, // d
+ //   0b10010111, // E
+ //   0b10000111, // F
+
 };
 
 static const uint8_t CHAR_BLANK = 0b00000000;
-static const uint8_t CHAR_DASH  = 0b10000000;
-static const uint8_t CHAR_r     = 0b10000010;  // 'r' for error display
-static const uint8_t CHAR_H     = 0b11001110;  // 'H' for Heat
-static const uint8_t CHAR_t     = 0b10110110;  // 't' for Heat
-static const uint8_t CHAR_DP    = 0b00100000;  // Decimal point bit
+static const uint8_t CHAR_DASH  = 0b00000001;
+static const uint8_t CHAR_r     = 0b01000001;  // 'r' for error display
+static const uint8_t CHAR_H     = 0b01110011;  // 'H' for Heat
+static const uint8_t CHAR_t     = 0b01101101;  // 't' for Heat
+static const uint8_t CHAR_DP    = 0b00000100;  // Decimal point bit
 
 // ============================================================================
 // SYSTEM STATE
@@ -437,6 +456,10 @@ void refreshDisplay() {
         segments |= CHAR_DP;
     }
 
+//            segments = 0x33;
+//         segments = SEGMENT_MAP[13];  // display d
+
+
     // Create digit select byte
     // Start with all cathodes HIGH (off) and LED status
     uint8_t digitSelect = 0b11100000 | state.ledStatus;
@@ -447,7 +470,8 @@ void refreshDisplay() {
 
     // Send to shift registers
     // NOTE: digitSelect sent FIRST, then segments (matches working test code)
-    shiftOut16(digitSelect, segments);
+//    shiftOut16(digitSelect, segments);
+      shiftOut16(segments, digitSelect);
 
     // Move to next digit
     state.currentDigit = (state.currentDigit + 1) % NUM_DIGITS;
@@ -472,11 +496,11 @@ void shiftOut16(uint8_t byte1, uint8_t byte2) {
 
     // PRE-SEQUENCE: Data LOW first, then Clock LOW
     // This signals start of word (data LOW before clock goes LOW)
-    PORTB &= ~(1 << DATA_PIN);
-    delayMicroseconds(16);
+  //  PORTB &= ~(1 << DATA_PIN);
+  //  delayMicroseconds(16);
 
-    PORTB &= ~(1 << CLOCK_PIN);
-    delayMicroseconds(16);
+ //   PORTB &= ~(1 << CLOCK_PIN);
+ //   delayMicroseconds(16);
 
     // Shift out first byte - MSB first (matches working test code)
     for (int8_t i = 7; i >= 0; i--) {
