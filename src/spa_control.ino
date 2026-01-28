@@ -19,6 +19,11 @@
 #include "spa_config.h"
 
 // ============================================================================
+// TEST MODE - uncomment to use exact bytes from working test_known_bytes.ino
+// ============================================================================
+#define TEST_MODE  // Comment out to use normal display logic
+
+// ============================================================================
 // SEGMENT PATTERNS
 // ============================================================================
 
@@ -45,6 +50,8 @@ static const uint8_t SEGMENT_MAP[] = {
 static const uint8_t CHAR_BLANK = 0b00000000;
 static const uint8_t CHAR_DASH  = 0b10000000;
 static const uint8_t CHAR_r     = 0b10000010;  // 'r' for error display
+static const uint8_t CHAR_H     = 0b11001110;  // 'H' for Heat
+static const uint8_t CHAR_t     = 0b10110110;  // 't' for Heat
 static const uint8_t CHAR_DP    = 0b00100000;  // Decimal point bit
 
 // ============================================================================
@@ -97,7 +104,7 @@ void processTemperature();
 void controlTemperature();
 void updateDisplay();
 void refreshDisplay();
-void shiftOut16(uint8_t segments, uint8_t digitSelect);
+void shiftOut16(uint8_t byte1, uint8_t byte2);
 void setDisplayNumber(float num, uint8_t decPlaces);
 void setDisplayChars(const char* str);
 void setDisplayError(uint8_t errorCode);
@@ -112,9 +119,22 @@ uint8_t getCathodeBit(uint8_t digit);
 // INITIALIZATION
 // ============================================================================
 
+#ifdef TEST_MODE
+// Minimal setup for test mode (matches test_known_bytes.ino exactly)
+void setup() {
+    // Set pin modes
+    DDRB |= (1 << DATA_PIN) | (1 << CLOCK_PIN);
+    DDRD |= (1 << LATCH_PIN);
+
+    // Set idle state (all HIGH)
+    PORTB |= (1 << DATA_PIN) | (1 << CLOCK_PIN);
+    PORTD |= (1 << LATCH_PIN);
+}
+#else
 void setup() {
     initializeSystem();
 }
+#endif
 
 void initializeSystem() {
     // Initialize state
@@ -172,6 +192,46 @@ void initializeSystem() {
 // MAIN LOOP
 // ============================================================================
 
+#ifdef TEST_MODE
+// Test mode: Use exact bytes from working test_known_bytes.ino
+void loop() {
+    static uint8_t digit = 0;
+
+    uint8_t byte1, byte2;
+
+    // Exact values from working test_known_bytes.ino for "Er.4" display
+    switch (digit) {
+        case 0:  // E on left digit
+            byte1 = 0xE9;  // digit/LEDs
+            byte2 = 0xC2;  // segments
+            break;
+        case 1:  // r on middle digit
+            byte1 = 0x41;
+            byte2 = 0x62;
+            break;
+        case 2:  // 4 on right digit
+            byte1 = 0x33;
+            byte2 = 0xA2;
+            break;
+        default:
+            byte1 = 0x00;
+            byte2 = 0x00;
+            break;
+    }
+
+    // Call shiftOut16 exactly like test_known_bytes.ino does
+    shiftOut16(byte1, byte2);
+
+    digit++;
+    if (digit >= 3) {
+        digit = 0;
+    }
+
+    delayMicroseconds(5000);  // 5ms refresh (same as test code)
+}
+
+#else
+// Normal mode: Full spa control functionality
 void loop() {
     unsigned long currentTime = millis();
 
@@ -198,6 +258,7 @@ void loop() {
     // ---- Display Multiplexing (continuous) ----
     refreshDisplay();
 }
+#endif
 
 // ============================================================================
 // SENSOR READING
@@ -385,7 +446,8 @@ void refreshDisplay() {
     digitSelect &= ~(1 << cathodeBit);
 
     // Send to shift registers
-    shiftOut16(segments, digitSelect);
+    // NOTE: digitSelect sent FIRST, then segments (matches working test code)
+    shiftOut16(digitSelect, segments);
 
     // Move to next digit
     state.currentDigit = (state.currentDigit + 1) % NUM_DIGITS;
@@ -404,36 +466,37 @@ uint8_t getCathodeBit(uint8_t digit) {
     }
 }
 
-void shiftOut16(uint8_t segments, uint8_t digitSelect) {
+void shiftOut16(uint8_t byte1, uint8_t byte2) {
     // Ensure idle state (both HIGH)
     PORTB |= (1 << DATA_PIN) | (1 << CLOCK_PIN);
 
     // PRE-SEQUENCE: Data LOW first, then Clock LOW
+    // This signals start of word (data LOW before clock goes LOW)
     PORTB &= ~(1 << DATA_PIN);
     delayMicroseconds(16);
 
     PORTB &= ~(1 << CLOCK_PIN);
     delayMicroseconds(16);
 
-    // Shift out segments byte (first byte) - MSB first
+    // Shift out first byte - MSB first (matches working test code)
     for (int8_t i = 7; i >= 0; i--) {
-        if ((segments >> i) & 0x01) {
+        if ((byte1 >> i) & 0x01) {
             PORTB |= (1 << DATA_PIN);
         } else {
             PORTB &= ~(1 << DATA_PIN);
         }
         delayMicroseconds(2);
 
-        PORTB |= (1 << CLOCK_PIN);   // Rising edge
+        PORTB |= (1 << CLOCK_PIN);   // Rising edge samples data
         delayMicroseconds(40);
 
         PORTB &= ~(1 << CLOCK_PIN);  // Falling edge
         delayMicroseconds(20);
     }
 
-    // Shift out digit select byte (second byte) - MSB first
+    // Shift out second byte - MSB first (matches working test code)
     for (int8_t i = 7; i >= 0; i--) {
-        if ((digitSelect >> i) & 0x01) {
+        if ((byte2 >> i) & 0x01) {
             PORTB |= (1 << DATA_PIN);
         } else {
             PORTB &= ~(1 << DATA_PIN);
@@ -447,10 +510,10 @@ void shiftOut16(uint8_t segments, uint8_t digitSelect) {
         delayMicroseconds(20);
     }
 
-    // Return to idle
+    // Return to idle HIGH (matches working test code)
     PORTB |= (1 << DATA_PIN) | (1 << CLOCK_PIN);
 
-    // Latch pulse (active LOW)
+    // Latch pulse (active LOW) - transfers shift register to outputs
     delayMicroseconds(2);
     PORTD &= ~(1 << LATCH_PIN);
     delayMicroseconds(40);
@@ -512,6 +575,10 @@ void setDisplayChars(const char* str) {
             state.digitCodes[i] = CHAR_DASH;
         } else if (c == 'r' || c == 'R') {
             state.digitCodes[i] = CHAR_r;
+        } else if (c == 'H') {
+            state.digitCodes[i] = CHAR_H;
+        } else if (c == 't') {
+            state.digitCodes[i] = CHAR_t;
         } else if (c == 'E' || c == 'e') {
             state.digitCodes[i] = SEGMENT_MAP[14];  // 'E'
         } else {
