@@ -118,6 +118,28 @@ Example sketches are available in the [samples/](samples/) folder:
 |------|-------------|
 | [countdown.ino](samples/countdown.ino) | Countdown timer example |
 
+## Spa Control Firmware
+
+The main firmware for the Spa Control device is in [src/spa_control.ino](src/spa_control.ino). It provides:
+
+- Temperature monitoring with ADC averaging
+- Hysteresis-based heater control
+- Status LED control (Heater, Auto, Air, Pump)
+- Error detection and safety shutdown
+- Support for linear (TMP36) and NTC thermistor sensors
+
+Configuration options are in [src/spa_config.h](src/spa_config.h).
+
+## Documentation
+
+Detailed documentation and flowcharts are available in the [docs/](docs/) folder:
+
+| Document | Description |
+|----------|-------------|
+| [spa_control_flowchart.md](docs/spa_control_flowchart.md) | Flowcharts for the spa control firmware |
+| [software_flowchart.md](docs/software_flowchart.md) | General software design flowcharts |
+| [schematic.pdf](docs/schematic.pdf) | Hardware schematic |
+
 ## Building
 
 This project uses PlatformIO with the MiniCore board package.
