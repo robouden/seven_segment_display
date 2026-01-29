@@ -113,9 +113,27 @@
 #define AIR_SWITCH_PIN    PD3   // Pin 5 (DIP)
 #define AUTO_SWITCH_PIN   PD4   // Pin 6 (DIP)
 
-// Relay outputs
-#define HEATER_RELAY_PIN  PD6   // Pin 12 (DIP)
-#define PUMP_RELAY_PIN    PD7   // Pin 13 (DIP)
+// Water/flow sensor input (detects water in heater housing)
+#define WATER_SENSOR_PIN  PC1   // A1 - Water presence sensor (HIGH = water present)
+
+// POH (Power On Heater) feedback - confirms heater power and detects stuck relay
+#define POH_FEEDBACK_PIN  PC5   // A5 - Optocoupler feedback (HIGH = heater powered)
+
+// Relay outputs (active HIGH to turn relay ON)
+// K1 - Safety Relay (in series with heater element)
+#define SAFETY_RELAY_PIN  PB2   // Pin 16 (DIP) - Must be ON for heater to work
+
+// K2 - Aux / Pump Low Speed
+#define PUMP_LOW_RELAY_PIN  PB0   // Pin 14 (DIP) - Pump low speed
+
+// K3 - Pump High Speed
+#define PUMP_HIGH_RELAY_PIN  PD7   // Pin 13 (DIP) - Pump high speed
+
+// K4 - Heating Element (wired in series with Safety Relay K1)
+#define HEATER_RELAY_PIN  PD6   // Pin 12 (DIP) - Heater element
+
+// Legacy compatibility
+#define PUMP_RELAY_PIN    PUMP_HIGH_RELAY_PIN
 
 // ============================================================================
 // SHIFT REGISTER BIT MAPPING
@@ -131,6 +149,26 @@
 #define CATHODE_LEFT_BIT    5   // QP5 - Left digit (tens)
 #define CATHODE_RIGHT_BIT   6   // QP6 - Right digit (decimal)
 #define CATHODE_MIDDLE_BIT  7   // QP7 - Middle digit (ones)
+
+// ============================================================================
+// PRIME FAILURE SETTINGS (Error 1 - H20)
+// ============================================================================
+
+// Time to run pump when attempting to recover from prime failure (milliseconds)
+#define PRIME_RECOVERY_TIME_MS     10000   // 10 seconds
+
+// Delay before checking water sensor after pump starts (milliseconds)
+#define PRIME_CHECK_DELAY_MS       2000    // 2 seconds for water to reach sensor
+
+// ============================================================================
+// ERROR CODES
+// ============================================================================
+
+#define ERROR_NONE              0   // No error
+#define ERROR_PRIME_FAILED      1   // H20 - No water in heater housing
+#define ERROR_OVER_TEMP         2   // Over temperature safety shutdown
+#define ERROR_SENSOR_FAULT      3   // Temperature sensor failure
+#define ERROR_RELAY_STUCK       4   // Relay stuck on - POH feedback when heater should be off
 
 // ============================================================================
 // FEATURE TOGGLES

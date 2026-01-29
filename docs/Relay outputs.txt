@@ -1,0 +1,20 @@
+Relay outputs
+
+K1 PB2
+Safety Relay
+ 
+K2 PB0
+Aux (Pump L)
+
+K3 PD7
+Pump (H)
+
+K4 PD6
+Heating Element (wired in series with Safety relay)
+
+
+
+
+POH 
+Feedback via optocoupler
+Input to MCU PC5. Confirms power to heating element and relay not stuck on when supposed to be off.

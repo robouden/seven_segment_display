@@ -69,9 +69,12 @@ static const uint8_t SEGMENT_MAP[] = {
 static const uint8_t CHAR_BLANK = 0b00000000;
 static const uint8_t CHAR_DASH  = 0b00000001;
 static const uint8_t CHAR_r     = 0b01000001;  // 'r' for error display
-static const uint8_t CHAR_H     = 0b01110011;  // 'H' for Heat
+static const uint8_t CHAR_H     = 0b01110011;  // 'H' for Heat/H20
 static const uint8_t CHAR_t     = 0b01101101;  // 't' for Heat
 static const uint8_t CHAR_DP    = 0b00000100;  // Decimal point bit
+
+// SEGMENT_MAP[0] is '0' for H20 display
+// SEGMENT_MAP[2] is '2' for H20 display
 
 // ============================================================================
 // SYSTEM STATE
@@ -92,14 +95,25 @@ struct {
     float lastGoodTemp;         // Last valid temperature reading
 
     // Control states
-    bool heaterOn;              // Heater relay state
-    bool pumpOn;                // Pump relay state
+    bool heaterOn;              // Heater element relay (K4) state
+    bool safetyRelayOn;         // Safety relay (K1) state - must be ON for heater
+    bool pumpHighOn;            // Pump high speed relay (K3) state
+    bool pumpLowOn;             // Pump low speed / Aux relay (K2) state
+    bool pumpOn;                // Legacy: true if either pump speed is on
     bool airOn;                 // Air jets state (future use)
     bool autoMode;              // Auto temperature control enabled
+    bool waterPresent;          // Water detected in heater housing
+    bool pohFeedback;           // POH feedback - true if heater has power
 
     // Error handling
     uint8_t sensorErrorCount;   // Consecutive sensor read errors
     SystemMode mode;            // Current operating mode
+    uint8_t currentError;       // Current error code (0 = none)
+
+    // Prime recovery (Error 1 - H20)
+    bool primeRecoveryActive;        // Currently attempting prime recovery
+    unsigned long primeRecoveryStart; // Timestamp when prime recovery started
+    bool lastPumpButtonState;        // For detecting button press
 
     // Display
     uint8_t digitCodes[NUM_DIGITS];  // Segment patterns for each digit
@@ -127,11 +141,18 @@ void shiftOut16(uint8_t byte1, uint8_t byte2);
 void setDisplayNumber(float num, uint8_t decPlaces);
 void setDisplayChars(const char* str);
 void setDisplayError(uint8_t errorCode);
+void setDisplayH20();
 void blankDisplay();
 void updateLEDs();
 void enterErrorState(uint8_t errorCode);
 void exitErrorState();
 float readTemperatureSensor();
+bool readWaterSensor();
+bool readPohFeedback();
+void checkPrimeFailure();
+void checkPohFeedback();
+void handlePrimeRecovery();
+void updateRelayOutputs();
 uint8_t getCathodeBit(uint8_t digit);
 
 // ============================================================================
@@ -161,11 +182,20 @@ void initializeSystem() {
     state.setpoint = DEFAULT_SETPOINT;
     state.lastGoodTemp = 25.0f;  // Assume room temp initially
     state.heaterOn = false;
+    state.safetyRelayOn = false;
+    state.pumpHighOn = false;
+    state.pumpLowOn = false;
     state.pumpOn = false;
     state.airOn = false;
     state.autoMode = true;
+    state.waterPresent = false;
+    state.pohFeedback = false;
     state.sensorErrorCount = 0;
     state.mode = MODE_NORMAL;
+    state.currentError = ERROR_NONE;
+    state.primeRecoveryActive = false;
+    state.primeRecoveryStart = 0;
+    state.lastPumpButtonState = false;
     state.currentDigit = 0;
     state.ledStatus = 0;
     state.lastSensorRead = 0;
@@ -189,9 +219,23 @@ void initializeSystem() {
     DDRD &= ~((1 << PUMP_SWITCH_PIN) | (1 << AIR_SWITCH_PIN) | (1 << AUTO_SWITCH_PIN));
     PORTD |= (1 << PUMP_SWITCH_PIN) | (1 << AIR_SWITCH_PIN) | (1 << AUTO_SWITCH_PIN);
 
-    // Configure relay outputs
-    DDRD |= (1 << HEATER_RELAY_PIN) | (1 << PUMP_RELAY_PIN);
-    PORTD &= ~((1 << HEATER_RELAY_PIN) | (1 << PUMP_RELAY_PIN));  // Start with relays off
+    // Configure water sensor pin as input (PC1/A1)
+    DDRC &= ~(1 << WATER_SENSOR_PIN);  // Input
+    PORTC &= ~(1 << WATER_SENSOR_PIN); // No pull-up (external circuit)
+
+    // Configure POH feedback pin as input (PC5/A5)
+    DDRC &= ~(1 << POH_FEEDBACK_PIN);  // Input
+    PORTC &= ~(1 << POH_FEEDBACK_PIN); // No pull-up (external circuit)
+
+    // Configure relay outputs on PORTD
+    // K4 (PD6) - Heater element, K3 (PD7) - Pump high speed
+    DDRD |= (1 << HEATER_RELAY_PIN) | (1 << PUMP_HIGH_RELAY_PIN);
+    PORTD &= ~((1 << HEATER_RELAY_PIN) | (1 << PUMP_HIGH_RELAY_PIN));
+
+    // Configure relay outputs on PORTB
+    // K1 (PB2) - Safety relay, K2 (PB0) - Pump low speed / Aux
+    DDRB |= (1 << SAFETY_RELAY_PIN) | (1 << PUMP_LOW_RELAY_PIN);
+    PORTB &= ~((1 << SAFETY_RELAY_PIN) | (1 << PUMP_LOW_RELAY_PIN));  // Start with relays off
 
     // Configure ADC
     ADMUX = (1 << REFS0);  // AVcc reference, ADC0 selected
@@ -254,12 +298,23 @@ void loop() {
 void loop() {
     unsigned long currentTime = millis();
 
+    // ---- Handle prime recovery if active ----
+    if (state.primeRecoveryActive) {
+        handlePrimeRecovery();
+    }
+
     // ---- Sensor Reading (every SENSOR_READ_INTERVAL ms) ----
     if (currentTime - state.lastSensorRead >= SENSOR_READ_INTERVAL) {
         state.lastSensorRead = currentTime;
 
         // Read all sensors
         readSensors();
+
+        // Check for prime failure (no water in heater)
+        checkPrimeFailure();
+
+        // Check POH feedback (stuck relay detection)
+        checkPohFeedback();
 
         // Process temperature data
         processTemperature();
@@ -293,7 +348,7 @@ void readSensors() {
         state.sensorErrorCount++;
 
         if (state.sensorErrorCount >= SENSOR_ERROR_THRESHOLD) {
-            enterErrorState(1);  // Error code 1: Sensor fault
+            enterErrorState(ERROR_SENSOR_FAULT);  // Error code 3: Sensor fault
         }
     } else {
         // Valid reading
@@ -316,6 +371,9 @@ void readSensors() {
     state.pumpOn = pumpSwitch;
     state.airOn = airSwitch;
     state.autoMode = autoSwitch;
+
+    // Read water sensor
+    state.waterPresent = readWaterSensor();
 }
 
 float readTemperatureSensor() {
@@ -371,6 +429,85 @@ float readTemperatureSensor() {
 }
 
 // ============================================================================
+// WATER SENSOR & PRIME FAILURE HANDLING
+// ============================================================================
+
+bool readWaterSensor() {
+    // Read water presence sensor on PC1 (A1)
+    // Returns true if water is detected in heater housing
+    // Assumes HIGH = water present, LOW = no water
+    return (PINC & (1 << WATER_SENSOR_PIN)) != 0;
+}
+
+void checkPrimeFailure() {
+    // Skip check if already in error state or during prime recovery
+    if (state.mode == MODE_ERROR || state.primeRecoveryActive) {
+        return;
+    }
+
+    // Check if heater is trying to run but no water is present
+    // This indicates a prime failure - no water in heater housing
+    if (state.heaterOn && !state.waterPresent) {
+        enterErrorState(ERROR_PRIME_FAILED);
+    }
+}
+
+void handlePrimeRecovery() {
+    unsigned long currentTime = millis();
+
+    // Check if pump button was just pressed to initiate recovery
+    bool pumpButtonPressed = !(PIND & (1 << PUMP_SWITCH_PIN));  // Active LOW
+
+    if (state.mode == MODE_ERROR && state.currentError == ERROR_PRIME_FAILED) {
+        // Detect rising edge of pump button press
+        if (pumpButtonPressed && !state.lastPumpButtonState && !state.primeRecoveryActive) {
+            // Start prime recovery - run pump for 10 seconds
+            state.primeRecoveryActive = true;
+            state.primeRecoveryStart = currentTime;
+
+            // Turn on pump high speed for priming
+            state.pumpHighOn = true;
+            state.pumpOn = true;
+            PORTD |= (1 << PUMP_HIGH_RELAY_PIN);
+        }
+    }
+
+    state.lastPumpButtonState = pumpButtonPressed;
+
+    // Handle active prime recovery
+    if (state.primeRecoveryActive) {
+        unsigned long elapsedTime = currentTime - state.primeRecoveryStart;
+
+        // Keep pump running
+        PORTD |= (1 << PUMP_HIGH_RELAY_PIN);
+
+        // After initial delay, start checking for water
+        if (elapsedTime >= PRIME_CHECK_DELAY_MS) {
+            state.waterPresent = readWaterSensor();
+
+            if (state.waterPresent) {
+                // Water detected - recovery successful!
+                state.primeRecoveryActive = false;
+                exitErrorState();
+                return;
+            }
+        }
+
+        // Check if recovery time has expired
+        if (elapsedTime >= PRIME_RECOVERY_TIME_MS) {
+            // Recovery failed - stop pump and show error again
+            state.primeRecoveryActive = false;
+            state.pumpHighOn = false;
+            state.pumpOn = false;
+            PORTD &= ~(1 << PUMP_HIGH_RELAY_PIN);
+
+            // Re-display H20 error
+            setDisplayH20();
+        }
+    }
+}
+
+// ============================================================================
 // TEMPERATURE PROCESSING
 // ============================================================================
 
@@ -385,8 +522,10 @@ void processTemperature() {
     // Safety check - immediate shutdown if over max safe temp
     if (state.currentTemp > MAX_TEMP_SAFE) {
         state.heaterOn = false;
-        PORTD &= ~(1 << HEATER_RELAY_PIN);  // Immediate relay off
-        enterErrorState(2);  // Error code 2: Over temperature
+        state.safetyRelayOn = false;
+        PORTD &= ~(1 << HEATER_RELAY_PIN);   // K4 off immediately
+        PORTB &= ~(1 << SAFETY_RELAY_PIN);    // K1 off immediately
+        enterErrorState(ERROR_OVER_TEMP);
     }
 }
 
@@ -397,9 +536,9 @@ void processTemperature() {
 void controlTemperature() {
     // Skip control if in error state or not in auto mode
     if (state.mode == MODE_ERROR || !state.autoMode) {
-        // In manual mode or error, ensure heater is off for safety
         if (state.mode == MODE_ERROR) {
             state.heaterOn = false;
+            state.safetyRelayOn = false;
         }
         return;
     }
@@ -417,17 +556,69 @@ void controlTemperature() {
     }
     // Within hysteresis band - maintain current state
 
-    // Apply relay outputs
-    if (state.heaterOn) {
+    // Safety relay (K1) must be ON whenever heater is ON
+    // K4 heater element is wired in series with K1 safety relay
+    state.safetyRelayOn = state.heaterOn;
+
+    // Update pump state from switches
+    // Pump high (K3) from pump switch, Pump low (K2) from air switch
+    state.pumpHighOn = state.pumpOn;
+    state.pumpLowOn = state.airOn;
+
+    // Apply all relay outputs
+    updateRelayOutputs();
+}
+
+void updateRelayOutputs() {
+    // K1 - Safety Relay (PB2)
+    if (state.safetyRelayOn) {
+        PORTB |= (1 << SAFETY_RELAY_PIN);
+    } else {
+        PORTB &= ~(1 << SAFETY_RELAY_PIN);
+    }
+
+    // K2 - Pump Low Speed / Aux (PB0)
+    if (state.pumpLowOn) {
+        PORTB |= (1 << PUMP_LOW_RELAY_PIN);
+    } else {
+        PORTB &= ~(1 << PUMP_LOW_RELAY_PIN);
+    }
+
+    // K3 - Pump High Speed (PD7)
+    if (state.pumpHighOn) {
+        PORTD |= (1 << PUMP_HIGH_RELAY_PIN);
+    } else {
+        PORTD &= ~(1 << PUMP_HIGH_RELAY_PIN);
+    }
+
+    // K4 - Heater Element (PD6) - only if safety relay is also on
+    if (state.heaterOn && state.safetyRelayOn) {
         PORTD |= (1 << HEATER_RELAY_PIN);
     } else {
         PORTD &= ~(1 << HEATER_RELAY_PIN);
     }
+}
 
-    if (state.pumpOn) {
-        PORTD |= (1 << PUMP_RELAY_PIN);
-    } else {
-        PORTD &= ~(1 << PUMP_RELAY_PIN);
+// ============================================================================
+// POH FEEDBACK MONITORING
+// ============================================================================
+
+bool readPohFeedback() {
+    // Read POH optocoupler feedback on PC5 (A5)
+    // HIGH = power to heater element confirmed
+    return (PINC & (1 << POH_FEEDBACK_PIN)) != 0;
+}
+
+void checkPohFeedback() {
+    state.pohFeedback = readPohFeedback();
+
+    // Check for stuck relay: POH says heater has power but we didn't turn it on
+    if (state.pohFeedback && !state.heaterOn) {
+        // Relay is stuck on - immediate safety shutdown
+        state.safetyRelayOn = false;
+        PORTB &= ~(1 << SAFETY_RELAY_PIN);    // K1 off immediately
+        PORTD &= ~(1 << HEATER_RELAY_PIN);    // K4 off immediately
+        enterErrorState(ERROR_RELAY_STUCK);
     }
 }
 
@@ -612,10 +803,18 @@ void setDisplayChars(const char* str) {
 }
 
 void setDisplayError(uint8_t errorCode) {
-    // Display "Er#" where # is error code
+    // Display "Er#" where # is error code (for generic errors)
     state.digitCodes[0] = SEGMENT_MAP[14];  // 'E'
     state.digitCodes[1] = CHAR_r;           // 'r'
     state.digitCodes[2] = SEGMENT_MAP[errorCode % 10];
+    state.decimalPosition = 0;
+}
+
+void setDisplayH20() {
+    // Display "H20" for Error 1 - Prime Failed (no water in heater)
+    state.digitCodes[0] = CHAR_H;           // 'H'
+    state.digitCodes[1] = SEGMENT_MAP[2];   // '2'
+    state.digitCodes[2] = SEGMENT_MAP[0];   // '0'
     state.decimalPosition = 0;
 }
 
@@ -657,13 +856,22 @@ void updateLEDs() {
 
 void enterErrorState(uint8_t errorCode) {
     state.mode = MODE_ERROR;
+    state.currentError = errorCode;
 
-    // Safety shutdown - turn off heater immediately
+    // Safety shutdown - turn off heater and safety relay immediately
     state.heaterOn = false;
-    PORTD &= ~(1 << HEATER_RELAY_PIN);
+    state.safetyRelayOn = false;
+    PORTD &= ~(1 << HEATER_RELAY_PIN);    // K4 off
+    PORTB &= ~(1 << SAFETY_RELAY_PIN);    // K1 off
 
     // Display error code
-    setDisplayError(errorCode);
+    if (errorCode == ERROR_PRIME_FAILED) {
+        // Error 1: Display "H20" for prime failure
+        setDisplayH20();
+    } else {
+        // Other errors: Display "Er#"
+        setDisplayError(errorCode);
+    }
 
     // Flash heater LED to indicate error
     state.ledStatus |= (1 << LED_HEATER_BIT);
@@ -671,5 +879,7 @@ void enterErrorState(uint8_t errorCode) {
 
 void exitErrorState() {
     state.mode = MODE_NORMAL;
+    state.currentError = ERROR_NONE;
     state.sensorErrorCount = 0;
+    state.primeRecoveryActive = false;
 }
