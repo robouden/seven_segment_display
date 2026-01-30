@@ -204,7 +204,16 @@
 #define ERROR_PRIME_FAILED      1   // H20 - No water in heater housing
 #define ERROR_OVER_TEMP         2   // Over temperature safety shutdown
 #define ERROR_SENSOR_FAULT      3   // Temperature sensor failure
-#define ERROR_RELAY_STUCK       4   // Relay stuck on - POH feedback when heater should be off
+#define ERROR_WATER_SENSOR      4   // Water sensor not present / disconnected (PC3 HIGH)
+#define ERROR_RELAY_STUCK       5   // Relay stuck on - POH feedback when heater should be off
+
+// Critical error range (3-8): spa stops, persists across power cycles,
+// requires simultaneous UP + DOWN + PUMP button press to clear
+#define CRITICAL_ERROR_MIN      3
+#define CRITICAL_ERROR_MAX      8
+
+// EEPROM address for persistent error storage
+#define EEPROM_ERROR_ADDR       0x00
 
 // ============================================================================
 // FEATURE TOGGLES

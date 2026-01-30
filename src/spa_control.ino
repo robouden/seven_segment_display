@@ -16,6 +16,7 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <avr/eeprom.h>
 #include "spa_config.h"
 
 // ============================================================================
@@ -136,7 +137,7 @@ struct {
 
 void initializeSystem();
 void readSensors();
-// uint8_t readHEF4021();
+uint8_t readHEF4021();
 void readButtons();
 void processTemperature();
 void controlTemperature();
@@ -151,10 +152,13 @@ void blankDisplay();
 void updateLEDs();
 void enterErrorState(uint8_t errorCode);
 void exitErrorState();
+bool isResetComboPressed();
+void clearCriticalError();
 float readTemperatureSensor();
 bool readWaterSensor();
 bool readPohFeedback();
 void checkPrimeFailure();
+void checkWaterSensorPresence();
 void checkPohFeedback();
 void handlePrimeRecovery();
 void updateRelayOutputs();
@@ -231,6 +235,10 @@ void initializeSystem() {
     PORTD |= (1 << DS18B20_PIN);    // Internal pull-up (external 4.7k required)
 #endif
 
+    // Configure water sensor present pin as input (PC3)
+    DDRC &= ~(1 << WATER_SENSOR_PRESENT_PIN);  // Input
+    PORTC |= (1 << WATER_SENSOR_PRESENT_PIN);  // Pull-up (HIGH = sensor not connected)
+
     // Configure water sensor pin as input (PC4)
     DDRC &= ~(1 << WATER_SENSOR_PIN);  // Input
     PORTC |= (1 << WATER_SENSOR_PIN); // Internal pull-up enabled
@@ -258,6 +266,13 @@ void initializeSystem() {
 
     // Initial display
     blankDisplay();
+
+    // Check EEPROM for persisted critical error (survives power cycle)
+    uint8_t savedError = eeprom_read_byte((uint8_t*)EEPROM_ERROR_ADDR);
+    if (savedError >= CRITICAL_ERROR_MIN && savedError <= CRITICAL_ERROR_MAX) {
+        enterErrorState(savedError);
+        return;  // Stay in error state until 3-button reset
+    }
 
     // Read initial sensor value
     state.currentTemp = readTemperatureSensor();
@@ -313,6 +328,28 @@ void loop() {
 void loop() {
     unsigned long currentTime = millis();
 
+    // ---- Critical error (3-8): all outputs off, wait for 3-button reset ----
+    if (state.mode == MODE_ERROR &&
+        state.currentError >= CRITICAL_ERROR_MIN &&
+        state.currentError <= CRITICAL_ERROR_MAX) {
+
+        // Read buttons only to detect reset combo
+        if (currentTime - state.lastSensorRead >= SENSOR_READ_INTERVAL) {
+            state.lastSensorRead = currentTime;
+            state.buttonRawState = readHEF4021();
+
+            // Check for simultaneous UP + DOWN + PUMP press
+            if (isResetComboPressed()) {
+                clearCriticalError();
+                return;
+            }
+        }
+
+        // Keep display refreshing to show error code
+        refreshDisplay();
+        return;
+    }
+
     // ---- Handle prime recovery if active ----
     if (state.primeRecoveryActive) {
         handlePrimeRecovery();
@@ -326,8 +363,8 @@ void loop() {
         readSensors();
 
 
-        // Check for presence of water sensor (no water sensor connected)
- //       readWaterSensorConnection();
+        // Check for water sensor presence (Error 4 if disconnected)
+        checkWaterSensorPresence();
 
         // Check for water sensor failure (no water in heater)
         checkPrimeFailure();
@@ -449,7 +486,8 @@ void readSensors() {
         state.sensorErrorCount = 0;
 
         // Exit error state if we were in one due to sensor issues
-        if (state.mode == MODE_ERROR) {
+        // (only for non-critical errors; critical errors require 3-button reset)
+        if (state.mode == MODE_ERROR && state.currentError < CRITICAL_ERROR_MIN) {
             exitErrorState();
         }
     }
@@ -572,6 +610,18 @@ bool readWaterSensor() {
     // Returns true if water is detected in heater housing
     // Assumes HIGH = water present, LOW = no water
     return (PINC & (1 << WATER_SENSOR_PIN)) != 0;
+}
+
+void checkWaterSensorPresence() {
+    // Skip check if already in error state
+    if (state.mode == MODE_ERROR) {
+        return;
+    }
+
+    // PC3 HIGH = water sensor not present / disconnected
+    if (readWaterSensorConnection()) {
+        enterErrorState(ERROR_WATER_SENSOR);  // Error 4 - critical, requires 3-button reset
+    }
 }
 
 void checkPrimeFailure() {
@@ -1077,6 +1127,19 @@ void enterErrorState(uint8_t errorCode) {
     PORTD &= ~(1 << HEATER_RELAY_PIN);    // K4 off
     PORTB &= ~(1 << SAFETY_RELAY_PIN);    // K1 off
 
+    // Critical errors (3-8): stop ALL outputs and persist to EEPROM
+    if (errorCode >= CRITICAL_ERROR_MIN && errorCode <= CRITICAL_ERROR_MAX) {
+        state.pumpHighOn = false;
+        state.pumpLowOn = false;
+        state.pumpOn = false;
+        state.airOn = false;
+        PORTD &= ~(1 << PUMP_HIGH_RELAY_PIN);    // K3 off
+        PORTB &= ~(1 << PUMP_LOW_RELAY_PIN);     // K2 off
+
+        // Persist error to EEPROM so it survives power cycle
+        eeprom_update_byte((uint8_t*)EEPROM_ERROR_ADDR, errorCode);
+    }
+
     // Display error code
     if (errorCode == ERROR_PRIME_FAILED) {
         // Error 1: Display "H20" for prime failure
@@ -1095,4 +1158,19 @@ void exitErrorState() {
     state.currentError = ERROR_NONE;
     state.sensorErrorCount = 0;
     state.primeRecoveryActive = false;
+}
+
+bool isResetComboPressed() {
+    // Check if UP, DOWN, and PUMP buttons are all pressed simultaneously
+    // Buttons are active LOW (pressed = 0)
+    uint8_t mask = (1 << BTN_PUMP_BIT) | (1 << BTN_TEMP_UP_BIT) | (1 << BTN_TEMP_DN_BIT);
+    return (state.buttonRawState & mask) == 0;
+}
+
+void clearCriticalError() {
+    // Clear persisted error from EEPROM
+    eeprom_update_byte((uint8_t*)EEPROM_ERROR_ADDR, ERROR_NONE);
+
+    // Full system reinitialize (clean slate)
+    initializeSystem();
 }
