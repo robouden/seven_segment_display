@@ -52,11 +52,24 @@
 
 // Uncomment ONE of these to select your sensor type:
 
+// DS18B20 digital temperature probe (OneWire on PD0)
+#define SENSOR_TYPE_DS18B20
+
 // Linear voltage output sensor (TMP36, LM35, etc.)
-#define SENSOR_TYPE_LINEAR
+// #define SENSOR_TYPE_LINEAR
 
 // NTC Thermistor (10K at 25C with 10K pullup)
 // #define SENSOR_TYPE_NTC_10K
+
+// ============================================================================
+// DS18B20 PARAMETERS
+// ============================================================================
+
+#ifdef SENSOR_TYPE_DS18B20
+    // Conversion time in milliseconds (depends on resolution)
+    // 9-bit: 94ms, 10-bit: 188ms, 11-bit: 375ms, 12-bit: 750ms
+    #define DS18B20_CONVERSION_MS  750     // 12-bit resolution (default)
+#endif
 
 // ============================================================================
 // LINEAR SENSOR PARAMETERS (for TMP36, LM35, etc.)
@@ -105,16 +118,20 @@
 #define CLOCK_PIN   PB5   // Pin 19 on ATmega8 (DIP), pin 17 on TQFP
 #define LATCH_PIN   PD5   // Pin 11 on ATmega8 (DIP), pin 9 on TQFP
 
-// Analog input for temperature sensor
+// HEF4021 serial data input (shared clock/latch with HEF4094)
+#define BUTTON_DATA_PIN  PB4   // Pin 18 on ATmega8 (DIP) - HEF4021 Q7 output
+
+// DS18B20 OneWire data pin (NOTE: PD0 is also RXD - do not use with DEBUG_SERIAL)
+#define DS18B20_PIN      PD0   // Pin 2 on ATmega8 (DIP) - requires 4.7k external pull-up to Vcc
+
+// Analog input for temperature sensor (used by LINEAR and NTC sensor types)
 #define TEMP_SENSOR_PIN  A0   // PC0
 
-// Digital inputs for switches (directly on PORTD)
-#define PUMP_SWITCH_PIN   PD2   // Pin 4 (DIP)
-#define AIR_SWITCH_PIN    PD3   // Pin 5 (DIP)
-#define AUTO_SWITCH_PIN   PD4   // Pin 6 (DIP)
+// Water/flow sensor present input (detects if water sensor is connected)
+#define WATER_SENSOR_PRESENT_PIN  PC3   // PC3 - Water presence sensor (HIGH = water Sensor error)
 
 // Water/flow sensor input (detects water in heater housing)
-#define WATER_SENSOR_PIN  PC1   // A1 - Water presence sensor (HIGH = water present)
+#define WATER_SENSOR_PIN  PC4   // PC4 - Water presence sensor (HIGH = water present)
 
 // POH (Power On Heater) feedback - confirms heater power and detects stuck relay
 #define POH_FEEDBACK_PIN  PC5   // A5 - Optocoupler feedback (HIGH = heater powered)
@@ -149,6 +166,25 @@
 #define CATHODE_LEFT_BIT    5   // QP5 - Left digit (tens)
 #define CATHODE_RIGHT_BIT   6   // QP6 - Right digit (decimal)
 #define CATHODE_MIDDLE_BIT  7   // QP7 - Middle digit (ones)
+
+// ============================================================================
+// HEF4021 INPUT BIT MAPPING
+// ============================================================================
+
+// DIP switches (D0-D3)
+#define DIP1_BIT          0   // D0 - DIP switch 1
+#define DIP2_BIT          1   // D1 - DIP switch 2
+#define DIP3_BIT          2   // D2 - DIP switch 3
+#define DIP4_BIT          3   // D3 - DIP switch 4
+
+// Push buttons (D4-D7) - active LOW (pressed = 0, released = 1)
+#define BTN_PUMP_BIT      4   // D4 - Pump push button
+#define BTN_AIR_BIT       5   // D5 - Air push button
+#define BTN_TEMP_UP_BIT   6   // D6 - Temp Up push button
+#define BTN_TEMP_DN_BIT   7   // D7 - Temp Down push button
+
+// Temperature setpoint adjustment step (degrees per button press)
+#define TEMP_STEP         0.5f
 
 // ============================================================================
 // PRIME FAILURE SETTINGS (Error 1 - H20)

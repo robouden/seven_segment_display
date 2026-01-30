@@ -110,10 +110,13 @@ struct {
     SystemMode mode;            // Current operating mode
     uint8_t currentError;       // Current error code (0 = none)
 
+    // HEF4021 button/DIP switch state
+    uint8_t buttonRawState;          // Raw HEF4021 byte (D7..D0)
+    uint8_t lastButtonState;         // Previous state for edge detection
+
     // Prime recovery (Error 1 - H20)
     bool primeRecoveryActive;        // Currently attempting prime recovery
     unsigned long primeRecoveryStart; // Timestamp when prime recovery started
-    bool lastPumpButtonState;        // For detecting button press
 
     // Display
     uint8_t digitCodes[NUM_DIGITS];  // Segment patterns for each digit
@@ -133,6 +136,8 @@ struct {
 
 void initializeSystem();
 void readSensors();
+// uint8_t readHEF4021();
+void readButtons();
 void processTemperature();
 void controlTemperature();
 void updateDisplay();
@@ -193,9 +198,10 @@ void initializeSystem() {
     state.sensorErrorCount = 0;
     state.mode = MODE_NORMAL;
     state.currentError = ERROR_NONE;
+    state.buttonRawState = 0xFF;     // All buttons idle HIGH
+    state.lastButtonState = 0xFF;    // No edges on first read
     state.primeRecoveryActive = false;
     state.primeRecoveryStart = 0;
-    state.lastPumpButtonState = false;
     state.currentDigit = 0;
     state.ledStatus = 0;
     state.lastSensorRead = 0;
@@ -215,13 +221,20 @@ void initializeSystem() {
     PORTB |= (1 << DATA_PIN) | (1 << CLOCK_PIN);
     PORTD |= (1 << LATCH_PIN);
 
-    // Configure digital inputs with pull-ups
-    DDRD &= ~((1 << PUMP_SWITCH_PIN) | (1 << AIR_SWITCH_PIN) | (1 << AUTO_SWITCH_PIN));
-    PORTD |= (1 << PUMP_SWITCH_PIN) | (1 << AIR_SWITCH_PIN) | (1 << AUTO_SWITCH_PIN);
+    // Configure HEF4021 serial data input (PB4)
+    DDRB &= ~(1 << BUTTON_DATA_PIN);   // Input
+    PORTB &= ~(1 << BUTTON_DATA_PIN);  // No pull-up (driven by HEF4021)
 
-    // Configure water sensor pin as input (PC1/A1)
+    // Configure DS18B20 OneWire pin (PD0) - input with pull-up
+#ifdef SENSOR_TYPE_DS18B20
+    DDRD &= ~(1 << DS18B20_PIN);    // Input
+    PORTD |= (1 << DS18B20_PIN);    // Internal pull-up (external 4.7k required)
+#endif
+
+    // Configure water sensor pin as input (PC4)
     DDRC &= ~(1 << WATER_SENSOR_PIN);  // Input
-    PORTC &= ~(1 << WATER_SENSOR_PIN); // No pull-up (external circuit)
+    PORTC |= (1 << WATER_SENSOR_PIN); // Internal pull-up enabled
+
 
     // Configure POH feedback pin as input (PC5/A5)
     DDRC &= ~(1 << POH_FEEDBACK_PIN);  // Input
@@ -237,9 +250,11 @@ void initializeSystem() {
     DDRB |= (1 << SAFETY_RELAY_PIN) | (1 << PUMP_LOW_RELAY_PIN);
     PORTB &= ~((1 << SAFETY_RELAY_PIN) | (1 << PUMP_LOW_RELAY_PIN));  // Start with relays off
 
-    // Configure ADC
+    // Configure ADC (only needed for analog sensor types)
+#ifndef SENSOR_TYPE_DS18B20
     ADMUX = (1 << REFS0);  // AVcc reference, ADC0 selected
     ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1);  // Enable ADC, prescaler 64
+#endif
 
     // Initial display
     blankDisplay();
@@ -310,8 +325,13 @@ void loop() {
         // Read all sensors
         readSensors();
 
-        // Check for prime failure (no water in heater)
+
+        // Check for presence of water sensor (no water sensor connected)
+ //       readWaterSensorConnection();
+
+        // Check for water sensor failure (no water in heater)
         checkPrimeFailure();
+
 
         // Check POH feedback (stuck relay detection)
         checkPohFeedback();
@@ -333,6 +353,78 @@ void loop() {
     refreshDisplay();
 }
 #endif
+
+// ============================================================================
+// DS18B20 ONEWIRE (bit-bang on PD0)
+// ============================================================================
+
+#ifdef SENSOR_TYPE_DS18B20
+
+static void owDriveLow() {
+    DDRD |= (1 << DS18B20_PIN);     // Output
+    PORTD &= ~(1 << DS18B20_PIN);   // Drive LOW
+}
+
+static void owRelease() {
+    DDRD &= ~(1 << DS18B20_PIN);    // Input (external pull-up pulls HIGH)
+    PORTD |= (1 << DS18B20_PIN);    // Enable internal pull-up as backup
+}
+
+static uint8_t owReadPin() {
+    return (PIND >> DS18B20_PIN) & 0x01;
+}
+
+static bool owReset() {
+    owDriveLow();
+    delayMicroseconds(480);
+    owRelease();
+    delayMicroseconds(70);
+    bool presence = !owReadPin();    // LOW = device present
+    delayMicroseconds(410);
+    return presence;
+}
+
+static void owWriteBit(uint8_t bit) {
+    if (bit) {
+        owDriveLow();
+        delayMicroseconds(6);
+        owRelease();
+        delayMicroseconds(64);
+    } else {
+        owDriveLow();
+        delayMicroseconds(60);
+        owRelease();
+        delayMicroseconds(10);
+    }
+}
+
+static uint8_t owReadBit() {
+    owDriveLow();
+    delayMicroseconds(6);
+    owRelease();
+    delayMicroseconds(9);
+    uint8_t bit = owReadPin();
+    delayMicroseconds(55);
+    return bit;
+}
+
+static void owWriteByte(uint8_t byte) {
+    for (uint8_t i = 0; i < 8; i++) {
+        owWriteBit(byte & 0x01);
+        byte >>= 1;
+    }
+}
+
+static uint8_t owReadByte() {
+    uint8_t byte = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+        byte >>= 1;
+        if (owReadBit()) byte |= 0x80;
+    }
+    return byte;
+}
+
+#endif // SENSOR_TYPE_DS18B20
 
 // ============================================================================
 // SENSOR READING
@@ -362,63 +454,97 @@ void readSensors() {
         }
     }
 
-    // Read digital inputs (active LOW with pull-ups)
-    bool pumpSwitch = !(PIND & (1 << PUMP_SWITCH_PIN));
-    bool airSwitch = !(PIND & (1 << AIR_SWITCH_PIN));
-    bool autoSwitch = !(PIND & (1 << AUTO_SWITCH_PIN));
-
-    // Update states based on switch positions
-    state.pumpOn = pumpSwitch;
-    state.airOn = airSwitch;
-    state.autoMode = autoSwitch;
+    // Read buttons and DIP switches via HEF4021
+    readButtons();
 
     // Read water sensor
     state.waterPresent = readWaterSensor();
 }
 
 float readTemperatureSensor() {
-    uint32_t adcSum = 0;
-
-    // Take multiple samples for averaging
-    for (uint8_t i = 0; i < ADC_SAMPLES; i++) {
-        // Select ADC0 channel
-        ADMUX = (ADMUX & 0xF0) | 0x00;
-
-        // Start conversion
-        ADCSRA |= (1 << ADSC);
-
-        // Wait for conversion to complete
-        while (ADCSRA & (1 << ADSC));
-
-        // Read result
-        adcSum += ADC;
-    }
-
-    // Calculate average
-    uint16_t adcAvg = adcSum / ADC_SAMPLES;
-
     float temperature;
 
-#ifdef SENSOR_TYPE_NTC_10K
+#ifdef SENSOR_TYPE_DS18B20
+    // DS18B20 non-blocking: start conversion, read result on next call
+    static bool conversionStarted = false;
+    static unsigned long conversionStart = 0;
+
+    if (!conversionStarted) {
+        // Start first conversion
+        if (owReset()) {
+            owWriteByte(0xCC);  // Skip ROM (single sensor on bus)
+            owWriteByte(0x44);  // Convert Temperature
+            conversionStarted = true;
+            conversionStart = millis();
+        }
+        return state.lastGoodTemp;  // Return last known good value
+    }
+
+    // Check if conversion is complete
+    if (millis() - conversionStart < DS18B20_CONVERSION_MS) {
+        return state.lastGoodTemp;  // Still converting
+    }
+
+    // Read scratchpad
+    if (!owReset()) {
+        conversionStarted = false;
+        return -999.0f;  // Sensor not responding
+    }
+    owWriteByte(0xCC);  // Skip ROM
+    owWriteByte(0xBE);  // Read Scratchpad
+
+    uint8_t lsb = owReadByte();
+    uint8_t msb = owReadByte();
+
+    // Start next conversion immediately
+    if (owReset()) {
+        owWriteByte(0xCC);
+        owWriteByte(0x44);
+        conversionStart = millis();
+    } else {
+        conversionStarted = false;
+    }
+
+    // Check for read error (all 1s = bus not connected)
+    if (lsb == 0xFF && msb == 0xFF) {
+        return -999.0f;
+    }
+
+    // Parse 12-bit signed temperature
+    int16_t raw = ((int16_t)msb << 8) | lsb;
+    temperature = raw / 16.0f;
+
+#elif defined(SENSOR_TYPE_NTC_10K)
     // NTC Thermistor calculation using Beta equation
-    // R = Rpullup * (ADC / (1023 - ADC))
-    // T = 1 / (1/T0 + (1/Beta) * ln(R/R0))
+    uint32_t adcSum = 0;
+    for (uint8_t i = 0; i < ADC_SAMPLES; i++) {
+        ADMUX = (ADMUX & 0xF0) | 0x00;
+        ADCSRA |= (1 << ADSC);
+        while (ADCSRA & (1 << ADSC));
+        adcSum += ADC;
+    }
+    uint16_t adcAvg = adcSum / ADC_SAMPLES;
 
     if (adcAvg < 10 || adcAvg > 1013) {
-        // Invalid reading (open or shorted sensor)
         return -999.0f;
     }
 
     float resistance = NTC_PULLUP_RESISTANCE * ((float)adcAvg / (1023.0f - (float)adcAvg));
-
-    // Simplified Beta equation
     float steinhart = log(resistance / NTC_RESISTANCE_25C) / NTC_BETA;
     steinhart += 1.0f / NTC_REFERENCE_TEMP;
-    temperature = (1.0f / steinhart) - 273.15f;  // Convert Kelvin to Celsius
+    temperature = (1.0f / steinhart) - 273.15f;
 
 #else  // SENSOR_TYPE_LINEAR (default)
     // Linear voltage output sensor (TMP36, LM35, etc.)
-    float voltage_mv = (adcAvg * 5000.0f) / 1024.0f;  // Convert to millivolts
+    uint32_t adcSum = 0;
+    for (uint8_t i = 0; i < ADC_SAMPLES; i++) {
+        ADMUX = (ADMUX & 0xF0) | 0x00;
+        ADCSRA |= (1 << ADSC);
+        while (ADCSRA & (1 << ADSC));
+        adcSum += ADC;
+    }
+    uint16_t adcAvg = adcSum / ADC_SAMPLES;
+    float voltage_mv = (adcAvg * 5000.0f) / 1024.0f;
     temperature = (voltage_mv - LINEAR_OFFSET_MV) / LINEAR_MV_PER_DEGREE;
 #endif
 
@@ -432,8 +558,17 @@ float readTemperatureSensor() {
 // WATER SENSOR & PRIME FAILURE HANDLING
 // ============================================================================
 
+
+bool readWaterSensorConnection() {
+    // Read if water sensor present on PC3
+    // Returns true if water is detected in heater housing
+    // Assumes LOW = water sensor connected, HIGH = no water sensore detected
+    return (PINC & (1 << WATER_SENSOR_PRESENT_PIN)) != 0;
+}
+
+
 bool readWaterSensor() {
-    // Read water presence sensor on PC1 (A1)
+    // Read water presence sensor on PC4
     // Returns true if water is detected in heater housing
     // Assumes HIGH = water present, LOW = no water
     return (PINC & (1 << WATER_SENSOR_PIN)) != 0;
@@ -455,12 +590,13 @@ void checkPrimeFailure() {
 void handlePrimeRecovery() {
     unsigned long currentTime = millis();
 
-    // Check if pump button was just pressed to initiate recovery
-    bool pumpButtonPressed = !(PIND & (1 << PUMP_SWITCH_PIN));  // Active LOW
+    // Check if pump button was just pressed (active LOW via HEF4021)
+    bool pumpButtonPressed = !(state.buttonRawState & (1 << BTN_PUMP_BIT));
+    bool pumpButtonWasPressed = !(state.lastButtonState & (1 << BTN_PUMP_BIT));
 
     if (state.mode == MODE_ERROR && state.currentError == ERROR_PRIME_FAILED) {
         // Detect rising edge of pump button press
-        if (pumpButtonPressed && !state.lastPumpButtonState && !state.primeRecoveryActive) {
+        if (pumpButtonPressed && !pumpButtonWasPressed && !state.primeRecoveryActive) {
             // Start prime recovery - run pump for 10 seconds
             state.primeRecoveryActive = true;
             state.primeRecoveryStart = currentTime;
@@ -471,8 +607,6 @@ void handlePrimeRecovery() {
             PORTD |= (1 << PUMP_HIGH_RELAY_PIN);
         }
     }
-
-    state.lastPumpButtonState = pumpButtonPressed;
 
     // Handle active prime recovery
     if (state.primeRecoveryActive) {
@@ -503,6 +637,85 @@ void handlePrimeRecovery() {
 
             // Re-display H20 error
             setDisplayH20();
+        }
+    }
+}
+
+// ============================================================================
+// HEF4021 BUTTON / DIP SWITCH READING
+// ============================================================================
+
+uint8_t readHEF4021() {
+    uint8_t data = 0;
+
+    // PL is HIGH (idle) - parallel data is already loaded into HEF4021
+    // Pull PL LOW to hold data and enable shift mode
+    PORTD &= ~(1 << LATCH_PIN);
+    delayMicroseconds(2);
+
+    // Ensure clock starts LOW
+    PORTB &= ~(1 << CLOCK_PIN);
+    delayMicroseconds(2);
+
+    // Read 8 bits, MSB first (D7 out first from Q7)
+    for (uint8_t i = 0; i < 8; i++) {
+        // Read Q7 on PB4
+        if (PINB & (1 << BUTTON_DATA_PIN)) {
+            data |= (1 << (7 - i));
+        }
+
+        // Clock rising edge to shift next bit out
+        PORTB |= (1 << CLOCK_PIN);
+        delayMicroseconds(2);
+        PORTB &= ~(1 << CLOCK_PIN);
+        delayMicroseconds(2);
+    }
+
+    // Return clock to idle HIGH
+    PORTB |= (1 << CLOCK_PIN);
+
+    // Leave PL LOW - do NOT return it to HIGH here
+    // Returning PL HIGH would strobe the HEF4094 output register with garbage
+    // The next shiftOut16() latch pulse will reload HEF4021 and strobe HEF4094
+
+    return data;
+}
+
+void readButtons() {
+    // Save previous state for edge detection
+    uint8_t prevState = state.buttonRawState;
+
+    // Read raw byte from HEF4021
+    state.buttonRawState = readHEF4021();
+    state.lastButtonState = prevState;
+
+    // Detect falling edges (1->0 = button pressed, active LOW)
+    // fallingEdge bit is set where previous was 1 and current is 0
+    uint8_t fallingEdge = prevState & ~state.buttonRawState;
+
+    // Pump button (D4) - toggle pump on/off
+    if (fallingEdge & (1 << BTN_PUMP_BIT)) {
+        state.pumpOn = !state.pumpOn;
+    }
+
+    // Air button (D5) - toggle air on/off
+    if (fallingEdge & (1 << BTN_AIR_BIT)) {
+        state.airOn = !state.airOn;
+    }
+
+    // Temp Up button (D6) - increase setpoint
+    if (fallingEdge & (1 << BTN_TEMP_UP_BIT)) {
+        state.setpoint += TEMP_STEP;
+        if (state.setpoint > MAX_SETPOINT) {
+            state.setpoint = MAX_SETPOINT;
+        }
+    }
+
+    // Temp Down button (D7) - decrease setpoint
+    if (fallingEdge & (1 << BTN_TEMP_DN_BIT)) {
+        state.setpoint -= TEMP_STEP;
+        if (state.setpoint < MIN_SETPOINT) {
+            state.setpoint = MIN_SETPOINT;
         }
     }
 }
